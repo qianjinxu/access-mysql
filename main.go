@@ -11,9 +11,8 @@ import (
 	"fmt"
 	"github.com/go-sql-driver/mysql"
 	"log"
+	"os"
 )
-
-var db *sql.DB
 
 type Album struct {
 	ID     int64
@@ -22,91 +21,109 @@ type Album struct {
 	Price  float32
 }
 
-func albumsByArtist(name string) ([]Album, error) {
-	var albums []Album
-	rows, err := db.Query("SELECT * FROM album WHERE artist = ?", name)
+var db *sql.DB
+
+func main() {
+	cfg := mysql.Config{
+		// User:                 "",
+		// Passwd:               "",
+		User:                 os.Getenv("DBUSER"),
+		Passwd:               os.Getenv("DBPASS"),
+		Net:                  "tcp",
+		Addr:                 "192.168.2.1:43306",
+		DBName:               "recordings",
+		AllowNativePasswords: true,
+	}
+	var err error
+	// db, err = sql.Open("mysql", "username:password@tcp(192.168.2.1:43306)/recordings")
+	db, err = sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
-		return nil, fmt.Errorf("albumsByArtist %q: %v", name, err)
+		log.Fatal(err)
+	}
+
+	pingErr := db.Ping()
+	if pingErr != nil {
+		log.Fatal(pingErr)
+	}
+	fmt.Println("MySQL Connected!")
+
+	selectArtist, err := albumsByArtist("John Coltrane")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%v\n", selectArtist)
+
+	selectID, err := albumByID(2)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%v\n", selectID)
+
+	insertID, err := addAlbum(Album{
+		Title:  "DJ",
+		Artist: "Qianjin Xu",
+		Price:  999.99,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Insert ID: %v\n", insertID)
+}
+
+func albumsByArtist(artist string) ([]Album, error) {
+	stmt, err := db.Prepare("SELECT * FROM album WHERE artist = ?")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer stmt.Close()
+	rows, err := stmt.Query(artist)
+	if err != nil {
+		return nil, fmt.Errorf("Artist: %q %v", artist, err)
 	}
 	defer rows.Close()
+	var albums []Album
 	for rows.Next() {
 		var alb Album
 		if err := rows.Scan(&alb.ID, &alb.Title, &alb.Artist, &alb.Price); err != nil {
-			return nil, fmt.Errorf("albumsByArtist %q: %v", name, err)
+			return nil, fmt.Errorf("Artist: %q %v", artist, err)
 		}
 		albums = append(albums, alb)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("albumsByArtist %q: %v", name, err)
+		return nil, fmt.Errorf("Artist: %q %v", artist, err)
 	}
 	return albums, nil
 }
 
 func albumByID(id int64) (Album, error) {
+	stmt, err := db.Prepare("SELECT * FROM album WHERE id = ?")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer stmt.Close()
 	var alb Album
-	row := db.QueryRow("SELECT * FROM album WHERE id = ?", id)
-	if err := row.Scan(&alb.ID, &alb.Title, &alb.Artist, &alb.Price); err != nil {
+	if err := stmt.QueryRow(id).Scan(&alb.ID, &alb.Title, &alb.Artist, &alb.Price); err != nil {
 		if err == sql.ErrNoRows {
-			return alb, fmt.Errorf("albumsById %d: no such album", id)
+			return alb, fmt.Errorf("ID: %d (Empty set)", id)
 		}
-		return alb, fmt.Errorf("albumsById %d: %v", id, err)
+		return alb, fmt.Errorf("ID: %d (%v)", id, err)
 	}
 	return alb, nil
 }
 
 func addAlbum(alb Album) (int64, error) {
-	result, err := db.Exec("INSERT INTO album (title, artist, price) VALUES (?, ?, ?)", alb.Title, alb.Artist, alb.Price)
+	stmt, err := db.Prepare("INSERT INTO album (title, artist, price) VALUES (?, ?, ?)")
 	if err != nil {
-		return 0, fmt.Errorf("addAlbum: %v", err)
+		log.Fatal(err)
+	}
+	defer stmt.Close()
+	result, err := stmt.Exec(alb.Title, alb.Artist, alb.Price)
+	if err != nil {
+		return 0, fmt.Errorf("Insert ID: %v", err)
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
-		return 0, fmt.Errorf("addAlbum: %v", err)
+		return 0, fmt.Errorf("Insert ID: %v", err)
 	}
 	return id, nil
-}
-
-func main() {
-	cfg := mysql.Config{
-		// User:                 os.Getenv("DBUSER"),
-		// Passwd:               os.Getenv("DBPASS"),
-		User:                 "root",
-		Passwd:               "Bd5wOq5v7wgg",
-		Net:                  "tcp",
-		Addr:                 "192.168.255.187:43306",
-		DBName:               "recordings",
-		AllowNativePasswords: true,
-	}
-	var err error
-	db, err = sql.Open("mysql", cfg.FormatDSN())
-	if err != nil {
-		log.Fatal(err)
-	}
-	pingErr := db.Ping()
-	if pingErr != nil {
-		log.Fatal(pingErr)
-	}
-	fmt.Println("Connected!")
-
-	albums, err := albumsByArtist("John Coltrane")
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Albums found: %v\n", albums)
-
-	alb, err := albumByID(2)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Album found: %v\n", alb)
-
-	albID, err := addAlbum(Album{
-		Title:  "The Modern Sound of Betty Carter",
-		Artist: "Betty Carter",
-		Price:  99.99,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("ID of added album: %v\n", albID)
 }
